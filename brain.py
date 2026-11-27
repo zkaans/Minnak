@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from ctypes import windll
 from ctypes.wintypes import BOOL, DWORD, HANDLE
-from memory import Memory
+from memory import Memory, USER_NAME
 
 try:
     import psutil
@@ -354,12 +354,12 @@ class Brain:
         if not llm_context and date_str is not None:
             return ""
         if not llm_context:
-            summary = "Bugün Kaan ile henüz pek konuşmadık, sakin geçti."
+            summary = f"Bugün {USER_NAME} ile henüz pek konuşmadık, sakin geçti."
             self.memory.save_diary_entry(target_date, summary)
             return summary
 
         prompt = (
-            f"Aşağıda bugün ({target_date}) Kaan ile yaşadığın gerçek olaylar var:\n{llm_context}\n\n"
+            f"Aşağıda bugün ({target_date}) {USER_NAME} ile yaşadığın gerçek olaylar var:\n{llm_context}\n\n"
             "KURAL: SADECE bu kayıtlarda geçen gerçek konuşmaları, baktığın ekranları veya araştırdığın "
             "konuları 1-2 cümleyle samimi, doğal bir günlük cümlesi olarak anlat. "
             "Sayı veya istatistik ('5 araştırma', '7 sohbet', 'CODING ortamı' gibi) ve kayıtta olmayan "
@@ -384,8 +384,9 @@ class Brain:
         scores: dict[tuple[str, str], int] = {}
         for row in logs:
             fb = row["feedback"]
-            if fb != 0:
-                key = (row["context"] or "GENERAL", row["action"] or "sohbet")
+            act = row["action"] or "sohbet"
+            if fb != 0 and act != "sohbet":
+                key = (row["context"] or "GENERAL", act)
                 scores[key] = scores.get(key, 0) + fb
 
         new_rules: list[str] = []
@@ -394,9 +395,6 @@ class Brain:
                 new_rules.append(f"{ctx} sırasında {act} azalt (negatif tepki)")
             elif net > 0:
                 new_rules.append(f"{ctx} sırasında {act} yararlı")
-
-        if not new_rules:
-            new_rules.append("Etkileşim dengeli, mevcut ritmi koru")
 
         for rule in new_rules[:3]:
             self.memory.append_rule(rule)

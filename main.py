@@ -9,7 +9,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 from brain import Brain, REFLEX_PATTERNS, search_open_web
 from lifecycle import Lifecycle, TRIGGER_SPECS
-from memory import Memory
+from memory import Memory, USER_NAME
 from sensors import (
     SensorSnapshot,
     capture_low_res_screen,
@@ -100,6 +100,7 @@ class MinnakController:
         self._reflex_handled_ids: set[int] = set()
         self._auto_future = None
         self._auto_cancel: threading.Event | None = None
+        self._active_bubble_meta: tuple[int, str, str] | None = None
 
         # Tek merkezli sohbet komutu yönlendirme tablosu (yeni komut eklemek/kaldırmak için tek liste)
         self.chat_commands = [
@@ -177,7 +178,7 @@ class MinnakController:
         return snap
 
     def _on_llm_response(self, res: dict, state_str: str, autonomous: bool, req_id: int) -> None:
-        if autonomous and req_id != self._req_id:
+        if (autonomous or req_id > 0) and req_id != self._req_id:
             return
         if self.window:
             self.window.set_overlay(None)
@@ -185,12 +186,24 @@ class MinnakController:
             act = res.get("aksiyon", "yok")
             if act and act != "yok":
                 self.execute_command(act)
+        log_id = int(res.get("_log_id", 0) or 0)
+        if log_id > 0:
+            self._active_bubble_meta = (
+                log_id,
+                str(res.get("_ctx", self.last_ctx)),
+                str(res.get("_act", self.last_action)),
+            )
+            allow_fb = True
+        else:
+            self._active_bubble_meta = None
+            allow_fb = False
         if self.window:
             self.window.show_message(
                 res.get("mesaj", "..."),
                 state=self.lifecycle.state.value,
                 autonomous=autonomous,
                 source_url=res.get("source_url", ""),
+                allow_feedback=allow_fb,
             )
             if self.window.diary_dialog and self.window.diary_dialog.isVisible():
                 self.window.diary_dialog.refresh()
@@ -214,7 +227,10 @@ class MinnakController:
                 )
                 if cancel_ev is not None and (cancel_ev.is_set() or res.get("cancelled")):
                     return
-                self.memory.log_event(ctx, act, res.get("mesaj", ""), feedback=feedback, user_msg=user_msg)
+                log_id = self.memory.log_event(ctx, act, res.get("mesaj", ""), feedback=feedback, user_msg=user_msg)
+                res["_log_id"] = log_id
+                res["_ctx"] = ctx
+                res["_act"] = act
                 self.signals.response_ready.emit(res, state_str, autonomous, target_req)
             finally:
                 self._llm_busy = max(0, self._llm_busy - 1)
@@ -236,7 +252,7 @@ class MinnakController:
                 if cancel_ev.is_set():
                     return
                 res = self.brain.generate(
-                    f"İlgi alanın '{topic}' hakkında şunu okudun: '{snippet}'. Kaan'a tek cümleyle ilginç bir şey paylaş.",
+                    f"İlgi alanın '{topic}' hakkında şunu okudun: '{snippet}'. {USER_NAME} için tek cümleyle ilginç bir şey paylaş.",
                     is_gaming=snap.is_gaming,
                     cancel_event=cancel_ev,
                 )
@@ -244,7 +260,10 @@ class MinnakController:
                     return
                 if url:
                     res["source_url"] = url
-                self.memory.log_event(snap.context, "arastir", res.get("mesaj", ""))
+                log_id = self.memory.log_event(snap.context, "arastir", res.get("mesaj", ""))
+                res["_log_id"] = log_id
+                res["_ctx"] = snap.context
+                res["_act"] = "arastir"
                 self.signals.response_ready.emit(res, state_str, True, start_req)
             finally:
                 self._llm_busy = max(0, self._llm_busy - 1)
@@ -358,7 +377,7 @@ class MinnakController:
         if not any(k in low for k in _SYSTEM_STATUS_PHRASES):
             return False
         summary = get_system_status_summary()
-        self.memory.log_event(snap.context, "sistem_durumu", summary, feedback=1)
+        self.memory.log_event(snap.context, "sistem_durumu", summary, feedback=0)
         if self.window:
             self.window.set_overlay(None)
             self.window.show_message(summary, self.lifecycle.state.value, autonomous=False)
@@ -381,25 +400,28 @@ class MinnakController:
                     if web_res:
                         url = web_res["url"]
                         prompt_text = (
-                            f"Kaan '{research_query}' konusunu araştırmanı istedi. "
+                            f"{USER_NAME} '{research_query}' konusunu araştırmanı istedi. "
                             f"Şu kaynak bulundu ({web_res['title']}): '{web_res['snippet']}'. "
-                            f"Kaan'a 1-2 cümleyle ilginç ve net özetle."
+                            f"{USER_NAME} için 1-2 cümleyle ilginç ve net özetle."
                         )
                     else:
                         prompt_text = (
-                            f"Kaan '{research_query}' konusunu araştırmanı istedi ama internetten sayfa çekilemedi. "
+                            f"{USER_NAME} '{research_query}' konusunu araştırmanı istedi ama internetten sayfa çekilemedi. "
                             f"Mevcut bilginle 1-2 cümleyle net cevapla."
                         )
                 else:
                     topic, snippet, url = self.lifecycle.explore_hobby_with_url()
                     prompt_text = (
                         f"İlgi alanın '{topic}' hakkında şu bulundu: '{snippet}'. "
-                        f"Kaan'a 1-2 cümleyle ilginç ve net paylaş."
+                        f"{USER_NAME} için 1-2 cümleyle ilginç ve net paylaş."
                     )
                 res = self.brain.generate(prompt_text, is_gaming=snap.is_gaming, remember_turn=True)
                 if url:
                     res["source_url"] = url
-                self.memory.log_event(snap.context, "arastir", res.get("mesaj", ""), feedback=1, user_msg=text)
+                log_id = self.memory.log_event(snap.context, "arastir", res.get("mesaj", ""), feedback=0, user_msg=text)
+                res["_log_id"] = log_id
+                res["_ctx"] = snap.context
+                res["_act"] = "arastir"
                 self.signals.response_ready.emit(res, self.lifecycle.state.value, False, req_id)
             finally:
                 self._llm_busy = max(0, self._llm_busy - 1)
@@ -445,18 +467,29 @@ class MinnakController:
         prompt_text = f"[Aktif Pencere: {snap.window_title}]\n{text}" if img_b64 and snap.window_title else text
         self._submit_brain(
             prompt_text, snap.is_gaming, self.lifecycle.state.value, snap.context, "sohbet",
-            image_b64=img_b64, autonomous=False, feedback=1, req_id=req_id, remember_turn=True, user_msg=text,
+            image_b64=img_b64, autonomous=False, feedback=0, req_id=req_id, remember_turn=True, user_msg=text,
         )
 
     def on_feedback(self, score: int, ignored: bool = False) -> None:
+        if self._active_bubble_meta is not None:
+            log_id, ctx, act = self._active_bubble_meta
+            self._active_bubble_meta = None
+        else:
+            log_id, ctx, act = 0, self.last_ctx, self.last_action
         reward = -0.10 if ignored else (0.20 if score > 0 else -0.25)
-        act_key = "yorum_yap" if self.last_action == "yorum_yap_vision" else self.last_action
-        self.memory.reinforce(self.last_ctx, act_key, reward)
-        if self.last_action == "arastir" and self.lifecycle.last_hobby_topic:
+        act_key = "yorum_yap" if act == "yorum_yap_vision" else act
+        self.memory.reinforce(ctx, act_key, reward)
+        if act == "arastir" and self.lifecycle.last_hobby_topic:
             self.memory.reinforce_hobby(self.lifecycle.last_hobby_topic, reward)
-        if not ignored:
+        if ignored:
+            if log_id > 0:
+                self.memory.update_log_feedback(log_id, -1)
+        else:
             self.memory.update_trait("samimiyet", delta=1.0 if score > 0 else -1.5)
-            self.memory.update_last_log_feedback(score)
+            if log_id > 0:
+                self.memory.update_log_feedback(log_id, score)
+            else:
+                self.memory.update_last_log_feedback(score)
 
     def on_pet(self) -> None:
         self.memory.update_trait("samimiyet", delta=0.02)

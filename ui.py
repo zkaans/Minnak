@@ -201,15 +201,19 @@ class MinnakWindow(QWidget):
         self.btn_link.clicked.connect(self._open_source_url)
         self.btn_link.hide()
         self.btn_ok = QPushButton("👍")
-        self.btn_no = QPushButton("✕")
+        self.btn_no = QPushButton("👎")
+        self.btn_close = QPushButton("×")
         self.btn_ok.setFixedSize(26, 22)
         self.btn_no.setFixedSize(26, 22)
+        self.btn_close.setFixedSize(22, 22)
         self.btn_ok.clicked.connect(lambda: self._handle_feedback(1))
         self.btn_no.clicked.connect(lambda: self._handle_feedback(-1))
+        self.btn_close.clicked.connect(self.bubble.hide)
         btn_row.addWidget(self.btn_link)
         btn_row.addStretch()
         btn_row.addWidget(self.btn_ok)
         btn_row.addWidget(self.btn_no)
+        btn_row.addWidget(self.btn_close)
 
         b_layout.addWidget(self.msg_label)
         b_layout.addLayout(btn_row)
@@ -361,6 +365,7 @@ class MinnakWindow(QWidget):
         self.btn_link.hide()
         self.btn_ok.hide()
         self.btn_no.hide()
+        self.btn_close.show()
         self._ignore_timer.stop()
         self._autonomous_bubble = False
         self.bubble.show()
@@ -436,10 +441,16 @@ class MinnakWindow(QWidget):
         self.perch_rect = (left, top, right, bottom) if (right - left >= 240 and bottom - top >= 120) else None
 
     def show_message(
-        self, text: str, state: str = "IDLE", autonomous: bool = False, source_url: str = ""
+        self,
+        text: str,
+        state: str = "IDLE",
+        autonomous: bool = False,
+        source_url: str = "",
+        allow_feedback: bool = False,
     ) -> None:
-        self.btn_ok.show()
-        self.btn_no.show()
+        self.btn_ok.setVisible(allow_feedback)
+        self.btn_no.setVisible(allow_feedback)
+        self.btn_close.show()
         clean_url = (source_url or "").strip()
         self._current_source_url = clean_url if clean_url.startswith(("http://", "https://")) else ""
         self.btn_link.setVisible(bool(self._current_source_url))
@@ -461,6 +472,8 @@ class MinnakWindow(QWidget):
     def _handle_feedback(self, score: int) -> None:
         self._ignore_timer.stop()
         self._autonomous_bubble = False
+        self.btn_ok.hide()
+        self.btn_no.hide()
         if score < 0:
             self.bubble.hide()
         self.on_feedback(score, ignored=False)

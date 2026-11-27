@@ -85,6 +85,23 @@ def test_all() -> None:
         bullets = [ln for ln in mem.read_rules().splitlines() if ln.strip().startswith("- ")]
         assert 1 <= len(bullets) <= 15
 
+        # Otomatik kurallar >20 satırı aşınca manuel kurallar korunmalı
+        tmp_rules2 = Path(__file__).parent / "_test_rules_preserve.md"
+        tmp_rules2.unlink(missing_ok=True)
+        mem_r = None
+        try:
+            mem_r = Memory(tmp_db, tmp_rules2, tmp_diary)
+            mem_r.append_rule("Manuel kural korunmalı")
+            for idx in range(25):
+                mem_r.append_rule(f"CTX{idx} sırasında act_{idx} yararlı")
+            assert mem_r.compress_rules_if_needed(max_lines=20, target_max=15) is True
+            rules_txt = mem_r.read_rules()
+            assert "Oyun sırasında asla bölme" in rules_txt and "Manuel kural korunmalı" in rules_txt
+        finally:
+            if mem_r is not None:
+                mem_r.conn.close()
+            tmp_rules2.unlink(missing_ok=True)
+
         # 3. Katman 3: Durum makinesi (GAMING, READING, CURIOUS vision, force_sleep)
         lc = Lifecycle(mem, cooldown_sec=0.0)
         assert lc.tick(SensorSnapshot(window_title="CS2", is_gaming=True, context="GAMING")) is None
@@ -228,7 +245,7 @@ def test_all() -> None:
         with patch.object(
             brain,
             "_post",
-            return_value={"message": {"content": '{"duygu":"normal","mesaj":"Dün Kaan ile harika kod yazdık.","aksiyon":"yok"}'}},
+            return_value={"message": {"content": '{"duygu":"normal","mesaj":"Dün Kullanıcı ile harika kod yazdık.","aksiyon":"yok"}'}},
         ):
             summary = brain.write_diary(missing_d, is_gaming=False)
             assert "kod yazdık" in summary
@@ -247,11 +264,11 @@ def test_all() -> None:
         assert len(mem.recent_diary(days=3, max_chars=600)) <= 600
 
         # Kural aday havuzu: 1. gelişte beklemede, 2. gelişte ogrendiklerim.md'ye geçer
-        assert mem.add_rule_candidate("Kaan sabahları filtre kahve içer.") is False
+        assert mem.add_rule_candidate("Kullanıcı sabahları filtre kahve içer.") is False
         assert "filtre kahve" not in mem.read_rules()
-        assert mem.add_rule_candidate("Kaan sabahları filtre kahve içer.") is True
+        assert mem.add_rule_candidate("Kullanıcı sabahları filtre kahve içer.") is True
         assert "filtre kahve" in mem.read_rules()
-        mem.add_rule_candidate("Kaan gece koyu tema sever.")
+        mem.add_rule_candidate("Kullanıcı gece koyu tema sever.")
         promoted = mem.promote_pending_candidates(max_promote=2)
         assert any("koyu tema" in p for p in promoted)
         assert "koyu tema" in mem.read_rules()
@@ -364,13 +381,33 @@ def test_all() -> None:
         )
         ctrl.window = win
         try:
-            # Eski req_id LLM aksiyonu ve eski otonom yanıt yok sayılmalı
+            # Eski req_id (otonom ve kullanıcı) yanıtları güncel balonu ezmemeli
+            win.show_message("güncel", "IDLE", autonomous=False)
             ctrl._req_id = 5
             ctrl._on_llm_response({"mesaj": "eski", "aksiyon": "uyu"}, "IDLE", autonomous=False, req_id=4)
-            assert win.state_label != "SLEEPING"
+            assert win.state_label != "SLEEPING" and win.msg_label.text() == "güncel"
             win.show_message("temiz", "IDLE", autonomous=False)
             ctrl._on_llm_response({"mesaj": "eski otonom"}, "IDLE", autonomous=True, req_id=4)
             assert win.msg_label.text() == "temiz"
+
+            # Bilgi balonu ok/no gizlemeli; kapatma tuşu geri bildirim tetiklememeli
+            assert win.btn_ok.isHidden() and win.btn_no.isHidden() and not win.btn_close.isHidden()
+            log_fb_id = mem.log_event("CODING", "yorum_yap", "Balon mesajı", feedback=0)
+            other_log_id = mem.log_event("GENERAL", "sistem_durumu", "Bilgi", feedback=0)
+            ctrl.last_ctx, ctrl.last_action = "GENERAL", "sistem_durumu"
+            ctrl._on_llm_response(
+                {"mesaj": "oylama açık", "aksiyon": "yok", "_log_id": log_fb_id, "_ctx": "CODING", "_act": "yorum_yap"},
+                "IDLE", autonomous=True, req_id=5,
+            )
+            assert not win.btn_ok.isHidden() and not win.btn_no.isHidden()
+            win.btn_close.click()
+            assert win.bubble.isHidden()
+            row_fb = mem.conn.execute("SELECT feedback FROM logs WHERE id = ?", (log_fb_id,)).fetchone()[0]
+            assert row_fb == 0
+            ctrl.on_feedback(1)
+            row_fb_after = mem.conn.execute("SELECT feedback FROM logs WHERE id = ?", (log_fb_id,)).fetchone()[0]
+            row_other_after = mem.conn.execute("SELECT feedback FROM logs WHERE id = ?", (other_log_id,)).fetchone()[0]
+            assert row_fb_after == 1 and row_other_after == 0
 
             # Link şeması kontrolü (http/https kabul, javascript/file ret)
             win.show_message("kaynak var", "READING", autonomous=True, source_url="https://example.com/haber")

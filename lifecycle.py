@@ -5,7 +5,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from enum import Enum
-from memory import Memory, clamp
+from memory import Memory, USER_NAME, clamp
 from sensors import SensorSnapshot, is_privacy_sensitive
 
 # --- Durum Makinesi ve Dürtü Eşikleri ---
@@ -68,7 +68,7 @@ TRIGGER_SPECS: dict[str, dict] = {
         "log_action": "sistem_stresi",
         "prompt": lambda snap: (
             f"Sistem yük altında (CPU:%{snap.cpu_percent:.0f}, RAM:%{snap.ram_percent:.0f}, "
-            f"En yoğun: {snap.top_process or 'bilinmiyor'}). Kaan'a tek cümlelik esprili bir uyarı yap."
+            f"En yoğun: {snap.top_process or 'bilinmiyor'}). {USER_NAME} için tek cümlelik esprili bir uyarı yap."
         ),
     },
     "odak_mola": {
@@ -79,7 +79,7 @@ TRIGGER_SPECS: dict[str, dict] = {
         "overlay_ticks": 0,
         "log_action": "odak_mola",
         "prompt": lambda snap: (
-            f"Kaan aralıksız {snap.continuous_work_min:.0f} dakikadır bilgisayarda çalışıyor. "
+            f"{USER_NAME} aralıksız {snap.continuous_work_min:.0f} dakikadır bilgisayarda çalışıyor. "
             "Su içmesi ve kısa mola vermesi için tek cümlelik tatlı bir hatırlatma yap."
         ),
     },
@@ -104,7 +104,7 @@ TRIGGER_SPECS: dict[str, dict] = {
         "log_action": "gece_uyarisi",
         "prompt": lambda _snap: (
             "Gece çok geç oldu (02:00-06:00 arası). "
-            "Esneyerek Kaan'a artık dinlenmesini tavsiye eden tek cümlelik uykulu bir söz söyle."
+            f"Esneyerek {USER_NAME} için artık dinlenmesini tavsiye eden tek cümlelik uykulu bir söz söyle."
         ),
     },
     "yorum_yap_vision": {
