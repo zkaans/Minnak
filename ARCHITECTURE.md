@@ -19,7 +19,7 @@ Minnak proje katmanları, kayıt tabloları (registry), çalışma akışları v
 ## 2. Çalışma Akışları
 
 ### 2.1 Başlatma ve Ollama Dayanıklılığı
-- Uygulamayı `C:\Users\Kaan\AppData\Local\Programs\Python\Python313\python.exe main.py` komutuyla çalıştır; konsolsuz başlatmak için `pythonw.exe main.py` kullan.
+- Uygulamayı `python main.py` komutuyla çalıştır; konsolsuz başlatmak için `pythonw.exe main.py` kullan.
 - `main()` içinde `MinnakController` ve `MinnakWindow` bağla, `ctrl.start_background_services()` arka plan servislerini başlat.
 - `brain.ensure_ollama(start_if_down=True)` `http://localhost:11434/api/tags` adresini kontrol eder; servis kapalıysa `%LOCALAPPDATA%\Programs\Ollama\ollama.exe serve` sürecini `CREATE_NO_WINDOW` bayrağıyla başlatır.
 - Oyun açık değilse `brain.warmup()` çalıştır; işlem boyunca `_llm_busy += 1` tut ve bitişte `INIT_COOLDOWN_SEC = 5.0` saniye bekle, böylece VRAM yüklemesi oyun sanılmaz.
@@ -63,4 +63,4 @@ Minnak proje katmanları, kayıt tabloları (registry), çalışma akışları v
   1. `sprites.py`: `_overlay_<ad>(img, pal, tail_phase, put)` çizim fonksiyonunu yaz ve `OVERLAY_RENDERERS` sözlüğüne ekle (kaldırmak için sözlükten sil).
 - **Yeni sensör veya eşik değiştirmek:**
   1. `sensors.py`, `lifecycle.py`, `ui.py`, `main.py` ve `brain.py` dosyalarının en üstündeki sabit bloklarından ilgili eşiği veya anahtar kelime listesini güncelle.
-- **Her değişiklik sonrası doğrulama:** `C:\Users\Kaan\AppData\Local\Programs\Python\Python313\python.exe test_core.py` komutunu çalıştır.
+- **Her değişiklik sonrası doğrulama:** `python test_core.py` komutunu çalıştır.
