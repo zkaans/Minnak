@@ -1,8 +1,9 @@
 """Katman 1a: Piksel Kedi Çizici, Renk Paletleri ve Animasyon Katmanları (Overlays)."""
+import json
 import math
 from pathlib import Path
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QImage, QMovie, QPixmap, QTransform, qRgba
+from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap, QTransform, qRgba
 
 CAT_SIZE = 64
 DANGLE_PAD = 16
@@ -16,21 +17,33 @@ PALETTE_NAMES = {
 
 PALETTES = {
     "white_tabby": {
-        "O": "#2B2D42", "B": "#F8F9FA", "C": "#FFFFFF", "S": "#6C757D",
-        "E": "#FF8FA3", "N": "#FF8FA3", "Y": "#E9ECEF", "P": "#212529",
+        "O": "#2B2D42", "B": "#F4F5F7", "D": "#C9D1DC", "C": "#FFFFFF", "S": "#6C757D",
+        "E": "#FF8FA3", "N": "#E85D75", "Y": "#6EC1E4", "P": "#1A1B26",
     },
     "void_black": {
-        "O": "#0D0D0F", "B": "#1A1A1D", "C": "#2E2E33", "S": "#121214",
-        "E": "#3A3A40", "N": "#555560", "Y": "#FFD166", "P": "#111111",
+        "O": "#08080C", "B": "#1B1C24", "D": "#11121A", "C": "#2E303D", "S": "#14151C",
+        "E": "#4A3B47", "N": "#5C4B59", "Y": "#FFD166", "P": "#08080C",
     },
     "orange_tabby": {
-        "O": "#3D2616", "B": "#F4A261", "C": "#FFF3E6", "S": "#E76F51",
-        "E": "#FF8FA3", "N": "#E76F51", "Y": "#2A9D8F", "P": "#111111",
+        "O": "#3D2114", "B": "#F4A261", "D": "#D97B3E", "C": "#FFF3E6", "S": "#C85A32",
+        "E": "#FF9AA2", "N": "#D95D5D", "Y": "#2A9D8F", "P": "#1E1410",
     },
     "tuxedo": {
-        "O": "#101114", "B": "#1D1E22", "C": "#FFFFFF", "S": "#2B2D33",
-        "E": "#FF8FA3", "N": "#FF8FA3", "Y": "#72EFDD", "P": "#111111",
+        "O": "#0E1016", "B": "#1F222B", "D": "#14161E", "C": "#FFFFFF", "S": "#2C303D",
+        "E": "#FF8FA3", "N": "#E85D75", "Y": "#72EFDD", "P": "#0E1016",
     },
+}
+
+MASTER_KEY_COLORS: dict[tuple[int, int, int], str] = {
+    (0x2B, 0x2D, 0x42): "O",
+    (0xF4, 0xF5, 0xF7): "B",
+    (0xC9, 0xD1, 0xDC): "D",
+    (0xFF, 0xFF, 0xFF): "C",
+    (0x6C, 0x75, 0x7D): "S",
+    (0xFF, 0x8F, 0xA3): "E",
+    (0xE8, 0x5D, 0x75): "N",
+    (0x4E, 0xCD, 0xC4): "Y",
+    (0x1A, 0x1B, 0x26): "P",
 }
 
 # 24x24 sola bakan piksel kedi iskeleti (. = şeffaf, O = dış hat, B = gövde, C = göğüs/pati, S = tekir çizgi, E = kulak içi, N = burun)
@@ -148,20 +161,174 @@ DEBUG_ANIM_SPECS: list[tuple[str, str, str]] = [
 
 
 class CatSpriteRenderer:
-    """24x24 pikseli 64x64 crisp-pixel'e çizer; sprites/ altında özel görsel varsa onu kullanır."""
+    """32x32 Aseprite spritesheet'i 64x64 crisp-pixel'e çizer; yoksa 24x24 prosedürel fallback kullanır."""
 
     def __init__(self, sprites_dir: Path | None = None):
         self.sprites_dir = sprites_dir or (Path(__file__).parent / "sprites")
-        self.custom_pix: QPixmap | None = None
-        self.custom_movie: QMovie | None = None
-        if self.sprites_dir.exists():
-            gif = next(self.sprites_dir.glob("*.gif"), None)
-            png = next(self.sprites_dir.glob("*.png"), None)
-            if gif:
-                self.custom_movie = QMovie(str(gif))
-                self.custom_movie.start()
-            elif png:
-                self.custom_pix = QPixmap(str(png))
+        self.sheet_tags: dict[str, tuple[list[QImage], str]] = {}
+        self.overlay_tags: dict[str, tuple[list[QImage], str]] = {}
+        self._palette_cache: dict[tuple[str, str, int], QImage] = {}
+        self._load_spritesheet()
+
+    def _parse_sheet(self, sheet_png: Path, sheet_json: Path) -> dict[str, tuple[list[QImage], str]]:
+        if not (sheet_png.exists() and sheet_json.exists()):
+            return {}
+        sheet = QImage(str(sheet_png)).convertToFormat(QImage.Format.Format_RGBA8888)
+        if sheet.isNull():
+            return {}
+        try:
+            data = json.loads(sheet_json.read_text(encoding="utf-8"))
+            frames_raw = data.get("frames", [])
+            if isinstance(frames_raw, dict):
+                frames_raw = list(frames_raw.values())
+            frames = [sheet.copy(e["frame"]["x"], e["frame"]["y"], e["frame"]["w"], e["frame"]["h"]) for e in frames_raw]
+            tags: dict[str, tuple[list[QImage], str]] = {}
+            for tag in data.get("meta", {}).get("frameTags", []):
+                start, end = int(tag["from"]), int(tag["to"])
+                if 0 <= start <= end < len(frames):
+                    tags[tag["name"]] = (frames[start : end + 1], tag.get("direction", "forward"))
+            return tags
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+
+    def _load_spritesheet(self) -> None:
+        self.sheet_tags = self._parse_sheet(
+            self.sprites_dir / "minnak_cat.png", self.sprites_dir / "minnak_cat.json"
+        )
+        self.overlay_tags = self._parse_sheet(
+            self.sprites_dir / "minnak_overlays.png", self.sprites_dir / "minnak_overlays.json"
+        )
+
+    @staticmethod
+    def _frame_index(count: int, step: int, direction: str) -> int:
+        if count <= 1:
+            return 0
+        if direction == "pingpong":
+            period = 2 * (count - 1)
+            pos = step % period
+            return pos if pos < count else period - pos
+        return step % count
+
+    def _remap_frame(self, palette_key: str, tag: str, idx: int) -> QImage:
+        cache_key = (palette_key, tag, idx)
+        cached = self._palette_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        pal = PALETTES.get(palette_key, PALETTES["white_tabby"])
+        rgb_map = {rgb: QColor(pal[code]) for rgb, code in MASTER_KEY_COLORS.items() if code in pal}
+        src = self.sheet_tags[tag][0][idx].copy()
+        w, h = src.width(), src.height()
+        for y in range(h):
+            for x in range(w):
+                c = src.pixelColor(x, y)
+                if c.alpha() == 0:
+                    continue
+                target = rgb_map.get((c.red(), c.green(), c.blue()))
+                if target is not None:
+                    target_c = QColor(target)
+                    target_c.setAlpha(c.alpha())
+                    src.setPixelColor(x, y, target_c)
+        self._palette_cache[cache_key] = src
+        return src
+
+    def _composite_overlay(self, img: QImage, name: str, tail_phase: float) -> bool:
+        entry = self.overlay_tags.get(name)
+        if entry is None:
+            return False
+        ov_frames, ov_dir = entry
+        ov_idx = self._frame_index(len(ov_frames), int(tail_phase * 2.2), ov_dir)
+        p = QPainter(img)
+        p.drawImage(0, 0, ov_frames[ov_idx])
+        p.end()
+        return True
+
+    def _render_sheet(
+        self,
+        palette_key: str,
+        facing_right: bool,
+        walk_phase: int,
+        tail_phase: float,
+        pupil_dx: int,
+        pupil_dy: int,
+        eye_state: str,
+        is_hanging: bool,
+        is_swatting: bool,
+        is_climbing: bool,
+        is_peeking: bool,
+        overlay: str | None,
+        is_vibing: bool,
+        is_dangling: bool,
+        vy: float = 0.0,
+        is_airborne: bool = False,
+        is_landing: bool = False,
+        is_walking: bool = False,
+        is_crouching: bool = False,
+    ) -> QPixmap:
+        vibing = is_vibing or overlay == "vibing"
+        forced_idx: int | None = None
+        if is_hanging and "hanging" in self.sheet_tags:
+            tag, step = "hanging", int(tail_phase * 2.0)
+        elif is_climbing and "climbing" in self.sheet_tags:
+            tag, step = "climbing", walk_phase
+        elif is_peeking and "peeking" in self.sheet_tags:
+            tag, step = "peeking", int(tail_phase * 1.4)
+        elif is_crouching and "jump" in self.sheet_tags:
+            tag, step, forced_idx = "jump", 0, 0
+        elif is_airborne and "jump" in self.sheet_tags:
+            tag, step = "jump", 0
+            forced_idx = 1 if vy < -5.0 else (2 if vy < -1.5 else (3 if vy <= 1.5 else 4))
+        elif is_landing and "jump" in self.sheet_tags:
+            tag, step, forced_idx = "jump", 0, 5
+        elif is_swatting and "swatting" in self.sheet_tags:
+            tag, step = "swatting", int(tail_phase * 3.5)
+        elif is_dangling and "dangling" in self.sheet_tags:
+            tag, step = "dangling", int(tail_phase * 1.8)
+        elif eye_state == "closed_sleep" and "sleep" in self.sheet_tags:
+            tag, step = "sleep", int(tail_phase * 2.5)
+        elif (eye_state == "squint_happy" or vibing) and "happy" in self.sheet_tags:
+            tag, step = "happy", int(tail_phase * 2.2)
+        elif is_walking and "walk" in self.sheet_tags:
+            tag, step = "walk", walk_phase
+        else:
+            tag, step = "idle", int(tail_phase * 1.1)
+
+        frames, direction = self.sheet_tags[tag]
+        idx = forced_idx if forced_idx is not None else self._frame_index(len(frames), step, direction)
+        img = self._remap_frame(palette_key, tag, idx).copy()
+
+        pal = PALETTES.get(palette_key, PALETTES["white_tabby"])
+        if tag == "idle" and idx != 5 and (pupil_dx != 0 or pupil_dy != 0):
+            dx = -pupil_dx if facing_right else pupil_dx
+            py = 9 if pupil_dy < 0 else 10
+            p_col, y_col = QColor(pal["P"]), QColor(pal["Y"])
+            for ex in (7, 13):
+                img.setPixelColor(ex, 10, y_col)
+                img.setPixelColor(ex + (1 if dx > 0 else (-1 if dx < 0 else 0)), py, p_col)
+
+        if overlay:
+            self._composite_overlay(img, overlay, tail_phase)
+        if vibing and overlay not in ("research", "writing_diary", "vibing"):
+            self._composite_overlay(img, "vibing", tail_phase)
+
+        if is_dangling:
+            padded = QImage(32, 37, QImage.Format.Format_RGBA8888)
+            padded.fill(qRgba(0, 0, 0, 0))
+            p = QPainter(padded)
+            p.drawImage(0, 5, img)
+            p.end()
+            img = padded
+
+        if facing_right:
+            img = img.mirrored(True, False)
+        out_h = CAT_SIZE * img.height() // 32
+        pm = QPixmap.fromImage(img).scaled(
+            CAT_SIZE, out_h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation
+        )
+        if is_climbing:
+            pm = pm.transformed(
+                QTransform().rotate(-90 if facing_right else 90), Qt.TransformationMode.FastTransformation
+            )
+        return pm
 
     def render(
         self,
@@ -180,16 +347,34 @@ class CatSpriteRenderer:
         overlay: str | None = None,
         is_vibing: bool = False,
         is_dangling: bool = False,
+        vy: float = 0.0,
+        is_airborne: bool = False,
+        is_landing: bool = False,
+        is_walking: bool = False,
+        is_crouching: bool = False,
     ) -> QPixmap:
-        if self.custom_movie and self.custom_movie.isValid():
-            pm = self.custom_movie.currentPixmap()
-            if not pm.isNull():
-                if facing_right:
-                    pm = QPixmap.fromImage(pm.toImage().mirrored(True, False))
-                return pm.scaled(CAT_SIZE, CAT_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
-        if self.custom_pix and not self.custom_pix.isNull():
-            pm = QPixmap.fromImage(self.custom_pix.toImage().mirrored(facing_right, False))
-            return pm.scaled(CAT_SIZE, CAT_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+        if self.sheet_tags:
+            return self._render_sheet(
+                palette_key=palette_key,
+                facing_right=facing_right,
+                walk_phase=walk_phase,
+                tail_phase=tail_phase,
+                pupil_dx=pupil_dx,
+                pupil_dy=pupil_dy,
+                eye_state=eye_state,
+                is_hanging=is_hanging,
+                is_swatting=is_swatting,
+                is_climbing=is_climbing,
+                is_peeking=is_peeking,
+                overlay=overlay,
+                is_vibing=is_vibing,
+                is_dangling=is_dangling,
+                vy=vy,
+                is_airborne=is_airborne,
+                is_landing=is_landing,
+                is_walking=is_walking,
+                is_crouching=is_crouching,
+            )
 
         pal = PALETTES.get(palette_key, PALETTES["white_tabby"])
         grid_h = 28 if is_dangling else 24

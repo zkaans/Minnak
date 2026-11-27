@@ -341,6 +341,7 @@ class MinnakWindow(QWidget):
                 self.vy = -9.5
                 self.vx = -7.0 if self.facing_right else 7.0
                 self.facing_right = self.vx > 0
+                self._crouch_timer = 2
             elif kind == "pose":
                 self.debug_locked = True
                 self.debug_pose = key
@@ -503,6 +504,7 @@ class MinnakWindow(QWidget):
         flight = max(10.0, 2.0 * abs(self.vy) / GRAVITY)
         self.vx = max(-max_vx, min(max_vx, (target_x - self.cat_cx) / flight))
         self.facing_right = target_x >= self.cat_cx
+        self._crouch_timer = 2
 
     def _refresh_perch(self, ignore_height: bool = False, ignore_x: bool = False) -> tuple[int, int, int, int] | None:
         if self.is_ghost:
@@ -627,6 +629,7 @@ class MinnakWindow(QWidget):
             self.climb_edge = None
             self.command_mode = None
             self.vy = -14.5
+            self._crouch_timer = 2
         elif action == "pati_at":
             self.swat_timer = 20
         elif action == "dans_et":
@@ -701,8 +704,11 @@ class MinnakWindow(QWidget):
     def _physics_tick(self) -> None:
         avail = QApplication.primaryScreen().availableGeometry()
         floor_y = float(avail.bottom() + 1)
+        self._is_airborne = False
+        if getattr(self, "_crouch_timer", 0) > 0:
+            self._crouch_timer -= 1
         self.tail_phase += 0.22 if self.state_label != "SLEEPING" else 0.05
-        if self.debug_locked:
+        if self.debug_locked and self.debug_pose == "climbing":
             self.walk_phase += 1
         self._perch_tick += 1
         if self._perch_tick % 10 == 0 and not self.dragging and self.command_mode != "climb":
@@ -865,6 +871,7 @@ class MinnakWindow(QWidget):
                 if impact > 4.0:
                     self.scale_x = min(1.34, 1.0 + impact * 0.024)
                     self.scale_y = max(0.68, 1.0 - impact * 0.024)
+            self._is_airborne = landed_y is None
         else:
             self.scale_x += (1.0 - self.scale_x) * 0.25
             self.scale_y += (1.0 - self.scale_y) * 0.25
@@ -961,6 +968,7 @@ class MinnakWindow(QWidget):
                 self.facing_right = step > 0
                 self.cat_cx += step
                 self.walk_phase += 1
+                self._last_walk_tick = self._perch_tick
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
@@ -982,6 +990,10 @@ class MinnakWindow(QWidget):
         is_peeking = (self.command_mode == "peek" and self.peek_timer > 0) or self.debug_pose == "peeking"
         is_perched = bool(self.perch_rect and abs(self.cat_bottom_y - self.perch_rect[1]) < 4)
         is_vibing = self.state_label == "VIBING" or self.active_overlay == "vibing"
+        is_airborne = getattr(self, "_is_airborne", False)
+        is_crouching = getattr(self, "_crouch_timer", 0) > 0
+        is_landing = not is_airborne and not is_crouching and self.scale_y < 0.90
+        is_walking = (self._perch_tick - getattr(self, "_last_walk_tick", -10)) <= 3
         pix = self.renderer.render(
             palette_key=self.palette_key,
             facing_right=self.facing_right,
@@ -998,6 +1010,11 @@ class MinnakWindow(QWidget):
             overlay=self.active_overlay,
             is_vibing=is_vibing,
             is_dangling=self._is_dangling() or self.debug_pose == "dangling",
+            vy=self.vy,
+            is_airborne=is_airborne,
+            is_landing=is_landing,
+            is_walking=is_walking,
+            is_crouching=is_crouching,
         )
 
         w = max(24, int(CAT_SIZE * self.scale_x))

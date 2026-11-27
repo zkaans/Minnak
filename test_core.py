@@ -345,6 +345,16 @@ def test_all() -> None:
         assert pm_sweat.toImage() != pm_normal.toImage()
         assert pm_yawn.toImage() != pm_normal.toImage()
         assert pm_dangle.height() > CAT_SIZE and pm_dangle.toImage() != pm_normal.toImage()
+        jump_imgs = [
+            renderer.render("white_tabby", is_crouching=True).toImage(),
+            renderer.render("white_tabby", is_airborne=True, vy=-7.0).toImage(),
+            renderer.render("white_tabby", is_airborne=True, vy=4.0).toImage(),
+            renderer.render("white_tabby", is_landing=True).toImage(),
+        ]
+        assert len({tuple(im.bits().asarray(im.sizeInBytes())) for im in jump_imgs}) == 4
+        assert renderer.render("white_tabby", is_hanging=True, is_airborne=True, vy=-5.0).toImage() == renderer.render("white_tabby", is_hanging=True).toImage()
+        assert renderer.render("white_tabby", is_walking=True, walk_phase=1).toImage() != renderer.render("white_tabby", is_walking=False, walk_phase=1).toImage()
+        assert renderer.render("white_tabby", pupil_dx=1).toImage() != pm_normal.toImage()
 
         ctrl = MinnakController()
         ctrl.memory = mem
@@ -493,8 +503,9 @@ def test_all() -> None:
 
             win.trigger_debug_animation("dangling")
             assert win.debug_locked is True and win.debug_pose == "dangling" and win.active_overlay is None
+            win._is_airborne = True
             win._physics_tick()
-            assert win.debug_pose == "dangling"
+            assert win.debug_pose == "dangling" and win._is_airborne is False
 
             win.trigger_debug_animation("reset")
             assert win.debug_locked is False and win.debug_pose is None and win.active_overlay is None and win.state_label == "IDLE"
