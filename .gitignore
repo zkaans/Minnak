@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+minnak.db
+gunluk.md
+ogrendiklerim.md
+graphify-out/
+_test_*
