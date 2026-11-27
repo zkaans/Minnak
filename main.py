@@ -138,6 +138,25 @@ class MinnakController:
 
         self.executor.submit(init_task)
 
+    def check_ollama_async(self) -> None:
+        self._llm_busy += 1
+
+        def task():
+            try:
+                ok = self.brain.ensure_ollama(True)
+                msg = "Ollama hazır." if ok else "Ollama başlatılamadı."
+                self.signals.response_ready.emit(
+                    {"duygu": "normal", "mesaj": msg, "aksiyon": "yok"},
+                    self.lifecycle.state.value,
+                    False,
+                    0,
+                )
+            finally:
+                self._llm_busy = max(0, self._llm_busy - 1)
+                self._llm_cooldown_until = time.monotonic() + LLM_COOLDOWN_SEC
+
+        self.executor.submit(task)
+
     def get_status_snapshot(self) -> dict:
         traits = self.memory.get_personality()
         return {
@@ -207,6 +226,9 @@ class MinnakController:
             )
             if self.window.diary_dialog and self.window.diary_dialog.isVisible():
                 self.window.diary_dialog.refresh()
+            if self.window.menu_dialog and self.window.menu_dialog.isVisible():
+                self.window.menu_dialog.refresh_rules()
+                self.window.menu_dialog.refresh()
 
     def _submit_brain(
         self, prompt: str, is_gaming: bool, state_str: str, ctx: str, act: str,
@@ -303,9 +325,7 @@ class MinnakController:
 
         if self.window:
             self.window.update_environment(
-                None,
                 snap.is_gaming,
-                same_pid=(snap.pid == os.getpid()),
                 enerji=self.lifecycle.drives.enerji,
                 sikilma=self.lifecycle.drives.sikilma,
                 merak=self.lifecycle.drives.merak,
@@ -332,6 +352,8 @@ class MinnakController:
             if snap.system_stress:
                 self.window.set_overlay("sweat", min_ticks=150)
         if not action:
+            return
+        if self._llm_busy > 0:
             return
 
         spec = TRIGGER_SPECS.get(action)
@@ -460,7 +482,7 @@ class MinnakController:
 
         use_vision = not snap.is_gaming and is_vision_prompt(text)
         img_b64 = (
-            capture_low_res_screen(snap.window_title, force_user_request=True)
+            capture_low_res_screen(snap.window_title)
             if use_vision
             else None
         )
@@ -542,7 +564,7 @@ def main() -> None:
         on_action=ctrl.execute_command,
         get_status=ctrl.get_status_snapshot,
         memory=ctrl.memory,
-        on_check_ollama=lambda: ctrl.brain.ensure_ollama(True),
+        on_check_ollama=ctrl.check_ollama_async,
         on_clear_history=ctrl.brain.clear_history,
         on_write_diary=ctrl.trigger_diary_write,
     )

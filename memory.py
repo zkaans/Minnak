@@ -19,6 +19,10 @@ _STOP_WORDS = {
 
 clamp = lambda v, lo, hi: max(lo, min(hi, v))
 
+
+def _norm_rule(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", text.casefold())).strip()
+
 DEFAULT_HOBBIES = [
     ("yapay zeka", "hn", 1.2),
     ("bilim", "wiki", 1.0),
@@ -82,14 +86,6 @@ class Memory:
                     ts DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
             """)
-                for alter_sql in (
-                    "ALTER TABLE logs ADD COLUMN processed INTEGER DEFAULT 0",
-                    "ALTER TABLE logs ADD COLUMN user_msg TEXT DEFAULT ''",
-                ):
-                    try:
-                        self.conn.execute(alter_sql)
-                    except sqlite3.OperationalError:
-                        pass
 
                 for trait, val, base, lo, hi in [
                     ("samimiyet", 50.0, 50.0, 10.0, 95.0),
@@ -359,12 +355,12 @@ class Memory:
         clean = (rule or "").strip().lstrip("- ").strip()
         if len(clean) < 5 or len(clean) > 140:
             return False
-        norm_key = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", clean.casefold())).strip()
+        norm_key = _norm_rule(clean)
         if not norm_key:
             return False
         with self._lock:
             existing = {
-                re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", ln.strip()[2:].casefold())).strip()
+                _norm_rule(ln.strip()[2:])
                 for ln in self.read_rules().splitlines()
                 if ln.strip().startswith("- ")
             }
@@ -465,10 +461,10 @@ class Memory:
         clean = rule.strip().lstrip("- ").strip()
         if not clean:
             return False
-        key = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", clean.lower())).strip()
+        key = _norm_rule(clean)
         with self._lock:
             existing = {
-                re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", ln.strip()[2:].lower())).strip()
+                _norm_rule(ln.strip()[2:])
                 for ln in self.read_rules().splitlines()
                 if ln.strip().startswith("- ")
             }

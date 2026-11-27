@@ -363,9 +363,8 @@ class MinnakMenuDialog(QWidget):
             self.refresh_rules()
 
     def _check_ollama(self) -> None:
-        ok = self.on_check_ollama()
-        self.win.show_message("Ollama hazır." if ok else "Ollama başlatılamadı.", self.win.state_label)
-        self.refresh()
+        self.win.show_message("Ollama kontrol ediliyor...", self.win.state_label)
+        self.on_check_ollama()
 
     def refresh_rules(self) -> None:
         self.rule_list.clear()

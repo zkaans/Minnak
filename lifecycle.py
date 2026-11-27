@@ -320,8 +320,3 @@ class Lifecycle:
             pass
         # shortcut: ağ kapalıysa çevrimdışı hobi özeti döner
         return topic, OFFLINE_HOBBY_SNIPPETS.get(topic, f"{topic} hakkında ilginç bir teknik not okudum."), ""
-
-    def explore_hobby(self) -> tuple[str, str]:
-        """Hobi ağırlığına göre kısa bilgi çeker."""
-        topic, snippet, _url = self.explore_hobby_with_url()
-        return topic, snippet

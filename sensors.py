@@ -7,7 +7,6 @@ import time
 from ctypes import Structure, WINFUNCTYPE, byref, c_int, c_uint, c_void_p, create_unicode_buffer, sizeof, windll, WinDLL
 from ctypes.wintypes import BOOL, HWND, LPARAM, RECT
 from dataclasses import dataclass
-from io import BytesIO
 
 try:
     import psutil
@@ -24,7 +23,7 @@ LATE_NIGHT_START_HOUR = 2
 LATE_NIGHT_END_HOUR = 6
 MIN_WIN_W = 240
 MIN_WIN_H = 120
-GSMTC_POLL_INTERVAL_SEC = 4.5
+GSMTC_POLL_INTERVAL_SEC = 25.0
 SCREEN_CAPTURE_W = 1280
 SCREEN_CAPTURE_H = 720
 SCREEN_JPEG_QUALITY = 78
@@ -105,7 +104,6 @@ class SensorSnapshot:
     cpu_percent: float = 0.0
     ram_percent: float = 0.0
     gpu_percent: float = 0.0
-    window_rect: tuple[int, int, int, int] = (0, 0, 0, 0)
     is_fullscreen: bool = False
     is_gaming: bool = False
     context: str = "GENERAL"  # GENERAL | CODING | BROWSING | GAMING | AFK
@@ -264,19 +262,27 @@ def _poll_gsmtc_async() -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
+def _has_media_or_browser_process() -> bool:
+    if not psutil:
+        return True
+    for proc in psutil.process_iter(["name"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            if name in _MEDIA_PLAYERS or any(b in name for b in BROWSER_KEYWORDS):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def detect_media_title(sync: bool = False) -> str:
-    """Önce Windows GSMTC (Deezer/Spotify/tarayıcı), yoksa pencere başlıklarından medya adını döndürür."""
+    """Önce pencere başlıklarından hızlı medya taraması yapar, gerekirse GSMTC sorgular."""
     global _gsmtc_cache, _gsmtc_last_poll
     if sync:
         _gsmtc_cache = _query_gsmtc_playing()
         _gsmtc_last_poll = time.monotonic()
-    else:
-        now = time.monotonic()
-        if now - _gsmtc_last_poll >= GSMTC_POLL_INTERVAL_SEC:
-            _gsmtc_last_poll = now
-            _poll_gsmtc_async()
-    if _gsmtc_cache:
-        return _gsmtc_cache
+        if _gsmtc_cache:
+            return _gsmtc_cache
 
     found: list[str] = []
     self_pid = os.getpid()
@@ -311,23 +317,57 @@ def detect_media_title(sync: bool = False) -> str:
     try:
         windll.user32.EnumWindows(_WNDENUMPROC(_cb), 0)
     except Exception:
+        pass
+    if found:
+        return found[0]
+    if sync:
         return ""
-    return found[0] if found else ""
+    if not _has_media_or_browser_process():
+        _gsmtc_cache = ""
+        return ""
+    now = time.monotonic()
+    if now - _gsmtc_last_poll >= GSMTC_POLL_INTERVAL_SEC:
+        _gsmtc_last_poll = now
+        _poll_gsmtc_async()
+    return _gsmtc_cache
 
 
 def _find_top_process(include_cpu: bool = True) -> tuple[str, float]:
-    """En yoğun kaynağı tüketen süreci (ad, skor/ram_yüzdesi) olarak tek taramada döner."""
+    """En yoğun kaynağı tüketen süreci (ad, skor/ram_yüzdesi) olarak döner."""
     if not psutil:
         return "", 0.0
-    attrs = ["name", "memory_percent", "cpu_percent"] if include_cpu else ["name", "memory_percent"]
-    top_name, top_val = "", -1.0
-    for proc in psutil.process_iter(attrs):
+    if not include_cpu:
+        top_name, top_val = "", -1.0
+        for proc in psutil.process_iter(["name", "memory_percent"]):
+            try:
+                name = proc.info.get("name") or ""
+                if not name or name.lower() in _IGNORED_PROCESSES:
+                    continue
+                mem_p = float(proc.info.get("memory_percent") or 0.0)
+                if mem_p > top_val:
+                    top_val = mem_p
+                    top_name = name
+            except Exception:
+                continue
+        return top_name, max(0.0, top_val)
+
+    procs: list[tuple[psutil.Process, str, float]] = []
+    for proc in psutil.process_iter(["name", "memory_percent"]):
         try:
             name = proc.info.get("name") or ""
             if not name or name.lower() in _IGNORED_PROCESSES:
                 continue
+            proc.cpu_percent(None)
             mem_p = float(proc.info.get("memory_percent") or 0.0)
-            val = (float(proc.info.get("cpu_percent") or 0.0) + mem_p * 2.0) if include_cpu else mem_p
+            procs.append((proc, name, mem_p))
+        except Exception:
+            continue
+    time.sleep(0.1)
+    top_name, top_val = "", -1.0
+    for proc, name, mem_p in procs:
+        try:
+            cpu_p = float(proc.cpu_percent(None) or 0.0)
+            val = cpu_p + mem_p * 2.0
             if val > top_val:
                 top_val = val
                 top_name = name
@@ -362,7 +402,7 @@ def check_is_late_night(hour: int | None = None) -> bool:
 
 
 def read_sensors() -> SensorSnapshot:
-    title, proc, pid, rect, is_full = get_active_window()
+    title, proc, pid, _rect, is_full = get_active_window()
     afk = get_afk_seconds()
     cpu = psutil.cpu_percent(interval=None) if psutil else 0.0
     ram = psutil.virtual_memory().percent if psutil else 0.0
@@ -374,7 +414,7 @@ def read_sensors() -> SensorSnapshot:
     work_min = _update_continuous_work(afk, gaming)
     late_night = check_is_late_night()
     return SensorSnapshot(
-        title, proc, pid, afk, cpu, ram, gpu, rect, is_full, gaming, ctx,
+        title, proc, pid, afk, cpu, ram, gpu, is_full, gaming, ctx,
         media, stress, top_proc, work_min, late_night,
     )
 
@@ -455,14 +495,6 @@ def find_perch_window_with_hwnd(
     return None
 
 
-def find_perch_window(
-    cx_phys: int, bottom_y_phys: int, exclude_pid: int, ignore_height: bool = False, ignore_x: bool = False
-) -> tuple[int, int, int, int] | None:
-    """Z-sırasına göre kedinin altındaki/önündeki en üst görünür pencereyi döner."""
-    res = find_perch_window_with_hwnd(cx_phys, bottom_y_phys, exclude_pid, ignore_height=ignore_height, ignore_x=ignore_x)
-    return res[1:] if res else None
-
-
 def find_climb_edge(cx_phys: int, bottom_y_phys: int, exclude_pid: int) -> tuple[int, int, int, str] | None:
     """Kediye yakın görünür pencere dikey kenarını veya ekran kenarını (edge_x, top, bottom, side) döner."""
     sw = windll.user32.GetSystemMetrics(0)
@@ -499,9 +531,8 @@ def get_system_status_summary() -> str:
     return f"CPU: %{cpu:.0f} | RAM: %{ram:.0f} | GPU: %{gpu:.0f} | En yoğun: {top_name} (%{top_mem:.1f} RAM)"
 
 
-def capture_low_res_screen(title: str, force_user_request: bool = False) -> str | None:
+def capture_low_res_screen(title: str) -> str | None:
     """Gizlilik kontrolünden geçerse bellekte 1280x720 (KeepAspectRatio) JPEG Base64 döner."""
-    _ = force_user_request
     if is_privacy_sensitive(title):
         return None
     try:
@@ -522,14 +553,4 @@ def capture_low_res_screen(title: str, force_user_request: bool = False) -> str 
             return base64.b64encode(bytes(ba)).decode("ascii")
     except Exception:
         pass
-
-    try:
-        from PIL import ImageGrab
-
-        img = ImageGrab.grab().convert("RGB")
-        img.thumbnail((SCREEN_CAPTURE_W, SCREEN_CAPTURE_H))
-        bio = BytesIO()
-        img.save(bio, format="JPEG", quality=SCREEN_JPEG_QUALITY)
-        return base64.b64encode(bio.getvalue()).decode("ascii")
-    except Exception:
-        return None
+    return None

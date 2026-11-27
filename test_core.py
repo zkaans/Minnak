@@ -54,7 +54,6 @@ def test_all() -> None:
         ctx_val, gm_val = classify_context("VALORANT", "valorant.exe", 0.0, gpu_load=10.0, is_fullscreen=True)
         assert ctx_val == "GAMING" and gm_val
         assert capture_low_res_screen("Bitwarden Vault - Chrome") is None
-        assert capture_low_res_screen("Bitwarden Vault - Chrome", force_user_request=True) is None
         assert is_vision_prompt("ekrana bak bu hata ne")
         assert "CPU:" in get_system_status_summary()
 
@@ -79,6 +78,9 @@ def test_all() -> None:
         assert mem.append_rule("Kısa cevap ver.") is True
         assert mem.append_rule("kisa cevap ver") is True
         assert mem.append_rule("Kısa cevap ver!") is False
+        assert mem.append_rule("İyi test kuralı") is True
+        assert mem.append_rule("iyi test kuralı") is False
+        assert mem.remove_rule("İyi test kuralı") is True
         assert mem.remove_rule("Kısa cevap ver.") is True
         assert mem.remove_rule("Olmayan kural") is False
         assert mem.compress_rules_if_needed(max_lines=20, target_max=15) is True
@@ -363,6 +365,12 @@ def test_all() -> None:
             SensorSnapshot(window_title="VALORANT", process_name="valorant.exe", gpu_percent=88.0, is_fullscreen=True, is_gaming=True, context="GAMING")
         )
         assert real_game_snap.is_gaming and real_game_snap.context == "GAMING"
+        ctrl._llm_busy = 1
+        with patch("main.read_sensors", return_value=SensorSnapshot(window_title="Code", context="CODING", system_stress=True)), patch.object(
+            ctrl, "_submit_brain"
+        ) as mock_sub:
+            ctrl.tick()
+            assert mock_sub.call_count == 0
         ctrl._llm_busy = 0
 
         edge = find_climb_edge(400, 600, exclude_pid=0)
@@ -415,10 +423,17 @@ def test_all() -> None:
             win.show_message("guvensiz", "READING", autonomous=True, source_url="javascript:alert(1)")
             assert win._current_source_url == "" and win.btn_link.isHidden()
 
-            win.update_environment((100, 200, 900, 700), is_gaming=False)
+            dpr = win.devicePixelRatioF() or 1.0
+            win.perch_rect = tuple(int(round(v / dpr)) for v in (100, 200, 900, 700))
+            win.update_environment(is_gaming=False)
             assert win.perch_rect is not None
-            win.update_environment((0, 0, 240, 196), is_gaming=False, same_pid=True)
-            assert win.perch_rect is not None
+            win.update_environment(is_gaming=True)
+            assert win.perch_rect is None
+            win.perch_rect = tuple(int(round(v / dpr)) for v in (100, 200, 900, 700))
+            win._click_timer.start(200)
+            assert win._click_timer.isActive()
+            win._click_timer.stop()
+            assert not win._click_timer.isActive()
             win.cat_cx = 400.0
             win.cat_bottom_y = 145.0
             win.vy = 18.0

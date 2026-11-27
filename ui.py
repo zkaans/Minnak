@@ -5,7 +5,7 @@ import random
 import time
 from ctypes import c_int, c_long, c_size_t, c_void_p, sizeof, windll
 from ctypes.wintypes import HWND, MSG, UINT
-from PyQt6.QtCore import QPoint, Qt, QTimer, QUrl
+from PyQt6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QCursor, QDesktopServices, QFont, QIcon, QPainter
 from PyQt6.QtWidgets import (
     QApplication,
@@ -174,6 +174,10 @@ class MinnakWindow(QWidget):
         self._ignore_timer.setSingleShot(True)
         self._ignore_timer.timeout.connect(self._on_bubble_ignored)
 
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(self.toggle_chat_input)
+
         self._phys_timer = QTimer(self)
         self._phys_timer.timeout.connect(self._physics_tick)
         self._phys_timer.start(PHYSICS_INTERVAL_MS)
@@ -224,6 +228,7 @@ class MinnakWindow(QWidget):
         self.input_box.setPlaceholderText("Minnak'a yaz (Alt+M)...")
         self.input_box.setStyleSheet("background: rgba(20,22,28,215); color: #fff; border-radius: 6px; padding: 4px;")
         self.input_box.returnPressed.connect(self._send_input)
+        self.input_box.installEventFilter(self)
         self.input_box.hide()
         layout.addWidget(self.input_box)
 
@@ -397,6 +402,12 @@ class MinnakWindow(QWidget):
         elif self.is_ghost:
             self._apply_win32_transparent(True)
 
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.input_box and event.type() == QEvent.Type.FocusOut and self.is_ghost and self.input_box.isVisible():
+            self.input_box.hide()
+            self._apply_win32_transparent(True)
+        return super().eventFilter(obj, event)
+
     def _apply_win32_transparent(self, enable: bool) -> None:
         hwnd = int(self.winId())
         style = _GetWinLong(hwnd, GWL_EXSTYLE)
@@ -420,9 +431,7 @@ class MinnakWindow(QWidget):
 
     def update_environment(
         self,
-        window_rect: tuple[int, int, int, int] | None,
         is_gaming: bool,
-        same_pid: bool = False,
         enerji: float = 100.0,
         sikilma: float = 0.0,
         merak: float = 0.0,
@@ -433,12 +442,6 @@ class MinnakWindow(QWidget):
         if is_gaming:
             self.perch_rect = None
             self.perch_hwnd = 0
-            return
-        if same_pid or window_rect is None:
-            return
-        dpr = self.devicePixelRatioF() or 1.0
-        left, top, right, bottom = (int(round(v / dpr)) for v in window_rect)
-        self.perch_rect = (left, top, right, bottom) if (right - left >= 240 and bottom - top >= 120) else None
 
     def show_message(
         self,
@@ -1101,7 +1104,7 @@ class MinnakWindow(QWidget):
             self.dragging = False
             dist = (event.globalPosition().toPoint() - self._press_pos).manhattanLength()
             if dist < 5:
-                self.toggle_chat_input()
+                self._click_timer.start(QApplication.doubleClickInterval())
             else:
                 self.vx = max(-22.0, min(22.0, self._drag_vx))
                 self.vy = max(-22.0, min(22.0, self._drag_vy))
@@ -1114,6 +1117,7 @@ class MinnakWindow(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._click_timer.stop()
             self.dragging = False
             self.toggle_pin()
 
