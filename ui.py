@@ -945,7 +945,12 @@ class MinnakWindow(QWidget):
                 if self.state_label in ("IDLE", "CURIOUS") and abs(self.cat_bottom_y - floor_y) < 5.0 and random.random() < 0.20:
                     self.peek_side = "left" if self.cat_cx < avail.center().x() else "right"
                     self.command_mode = "peek"
-                    self.walk_target_x = float(avail.left() - 4) if self.peek_side == "left" else float(avail.right() + 4)
+                    # Peeking sprite 64px içinde kenara yaslı (x=40..63 / aynalanınca 0..23); ekran içinde kalması için merkez ±32px içeride olmalı
+                    self.walk_target_x = (
+                        float(avail.left() + CAT_SIZE // 2)
+                        if self.peek_side == "left"
+                        else float(avail.right() - CAT_SIZE // 2 + 1)
+                    )
                     return
                 self.walk_target_x = float(random.randint(avail.left() + 48, avail.right() - 48))
 

@@ -133,6 +133,8 @@ def test_all() -> None:
         with patch.object(brain, "_post", return_value={"done": True}) as mock_post:
             assert brain.evacuate_vram() is True
             assert mock_post.call_args[0][1]["keep_alive"] == 0
+            assert brain.warmup() is True
+            assert mock_post.call_args[0][1]["options"]["num_ctx"] == gpu_opts["num_ctx"]
 
         with patch.object(
             brain,

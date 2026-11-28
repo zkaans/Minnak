@@ -212,7 +212,7 @@ class Brain:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            for _ in range(5):
+            for _ in range(20):
                 time.sleep(0.5)
                 if self.check_ollama():
                     return True
@@ -222,7 +222,12 @@ class Brain:
 
     def warmup(self) -> bool:
         try:
-            self._post("/api/generate", {"model": self.model, "prompt": "", "keep_alive": "10m"}, timeout=30.0)
+            options, keep_alive = self.build_options(False)
+            self._post(
+                "/api/generate",
+                {"model": self.model, "prompt": "", "options": options, "keep_alive": keep_alive},
+                timeout=45.0,
+            )
             self.ollama_online = True
             return True
         except Exception:
@@ -318,7 +323,7 @@ class Brain:
         }
         try:
             kwargs = {"cancel_event": cancel_event} if cancel_event is not None else {}
-            req_timeout = 30.0 if (is_gaming or image_b64) else 15.0
+            req_timeout = 45.0 if (is_gaming or image_b64) else 35.0
             res = self._post("/api/chat", payload, timeout=req_timeout, **kwargs)
             self.ollama_online = True
             parsed = json.loads(res["message"]["content"])
